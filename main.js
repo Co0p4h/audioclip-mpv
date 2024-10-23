@@ -5,7 +5,8 @@ var menu_open = false;
 var config = {
   audio_folder_path: mp.get_property("working-directory"),
   audio_extension: ".mp3",
-  audio_bitrate: "256k"
+  audio_bitrate: "256k",
+  include_timestamp: true,
 };
 
 var key_binds = {
@@ -13,7 +14,7 @@ var key_binds = {
   close_menu: 'ESC',
   set_start_time: 's',
   set_end_time: 'e',
-  create_audio_clip: 'c'
+  create_audio_clip: 'C'
 }
 
 // function to construct ffmpeg arguments for audio clipping
@@ -32,12 +33,15 @@ function mkargs_audio(clip_filename, audio_track_id) {
 }
 
 function display_menu() {
-  var osd_message = "Audio Clip Menu\n";
-  osd_message += "s: Set Start Time (current: " + (start_time !== null ? start_time.toFixed(2) : "not set") + "s)\n";
-  osd_message += "e: Set End Time (current: " + (end_time !== null ? end_time.toFixed(2) : "not set") + "s)\n";
-  osd_message += "c: Create Audio Clip\n";
-  osd_message += "ESC: Close Menu";
-  mp.osd_message(osd_message, 30);
+  var menu_text = [
+    "Audio Clip Menu",
+    key_binds.set_start_time + ": Set Start Time (current: " + (start_time !== null ? start_time.toFixed(2) : "not set") + "s)",
+    key_binds.set_end_time + ": Set End Time (current: " + (end_time !== null ? end_time.toFixed(2) : "not set") + "s)",
+    key_binds.create_audio_clip + ": Create Audio Clip",
+    key_binds.close_menu + ": Close Menu"
+  ].join("\n");
+
+  mp.osd_message(menu_text, 30);
 }
 
 function open_menu() {
@@ -61,44 +65,65 @@ function set_start_time() {
 function set_end_time() {
   if (menu_open) {
     end_time = mp.get_property_number("time-pos");
-    mp.osd_message("End time set: " + end_time.toFixed(2) + "s", 2);
+    // mp.osd_message("End time set: " + end_time.toFixed(2) + "s", 2);
     display_menu();
   }
 }
 
-// make it easy to copy the just saved file 
-function open_folder_in_finder() {
-  var args = ["open", config.audio_folder_path];
+function open_folder() {
+  var command;
+  switch (mp.get_property("platform")) {
+    case "windows":
+      command = ["explorer", config.audio_folder_path];
+      break;
+    case "darwin":
+      command = ["open", config.audio_folder_path];
+      break;
+    default:
+      command = ["xdg-open", config.audio_folder_path];
+      break;
+  }
+
   mp.command_native_async({
     name: "subprocess",
-    args: args
-  }, function (success, result) {
-    if (success) {
-      mp.osd_message("Opened folder in Finder", 2);
-    } else {
-      mp.osd_message("Error opening folder in Finder", 2);
-    }
+    args: command
   });
 }
 
-function create_audio_clip() {
-  if (menu_open && start_time !== null && end_time !== null && start_time < end_time) {
-    var filename = mp.get_property("filename/no-ext");
-    var audio_track_id = mp.get_property_number("aid"); // get the current audio track ID
-    var args = mkargs_audio(filename + "_clip", audio_track_id);
+function format_time(seconds) {
+  var minutes = Math.floor(seconds / 60);
+  var secs = Math.floor(seconds % 60);
 
-    mp.command_native_async({ name: "subprocess", args: args }, function (success, result) {
-      if (success) {
-        var output_path = config.audio_folder_path + '/' + filename + "_clip" + config.audio_extension;
-        mp.osd_message("audio clip created: " + output_path, 2);
-        open_folder_in_finder();
-      } else {
-        mp.osd_message("error creating audio clip", 2);
-      }
-    });
-  } else {
+  return minutes + "-" + secs;
+}
+
+function generate_filename() {
+  var base_filename = mp.get_property("filename/no-ext");
+  var timestamp = config.include_timestamp
+    ? '_' + format_time(start_time) + '_to_' + format_time(end_time)
+    : '';
+  return base_filename + timestamp;
+}
+
+function create_audio_clip() {
+  if (!menu_open || start_time === null || end_time === null || start_time >= end_time) {
     mp.osd_message("invalid start/end times", 2);
+    return;
   }
+
+  var filename = generate_filename();
+  var audio_track_id = mp.get_property_number("aid"); // get the current audio track ID
+  var args = mkargs_audio(filename, audio_track_id);
+
+  mp.command_native_async({ name: "subprocess", args: args }, function (success) {
+    if (success) {
+      var output_path = config.audio_folder_path + '/' + filename + "_clip" + config.audio_extension;
+      mp.osd_message("audio clip created: " + output_path, 2);
+      open_folder();
+    } else {
+      mp.osd_message("error creating audio clip", 2);
+    }
+  });
 }
 
 mp.add_key_binding(key_binds.open_menu, "open_menu", open_menu);
